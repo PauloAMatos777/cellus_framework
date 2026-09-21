@@ -75,10 +75,11 @@ def route_after_planning(state: AgentState, max_iterations: int) -> str:
     return "synthesize"
 
 
-def initial_state(question: str) -> AgentState:
+def initial_state(question: str, session_id: str = "default") -> AgentState:
     return {
         "messages": [HumanMessage(content=question)],
         "question": question,
+        "session_id": session_id,
         "selected_tools": [],
         "tool_times": {},
         "final_answer": "",

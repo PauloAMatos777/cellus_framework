@@ -7,7 +7,9 @@ from langchain_core.tools import BaseTool
 from cellus.connectors.base import ToolConnector
 from cellus.core.planner import Planner
 from cellus.core.workflow import build_workflow
+from cellus.memory.conversation import ConversationMemory
 from cellus.utils.logging import get_logger
+from cellus.utils.telemetry import setup_telemetry
 
 logger = get_logger("cellus.agent")
 
@@ -20,11 +22,13 @@ class CellusAgent:
         tools: list[BaseTool],
         planner: Planner,
         connectors: list[ToolConnector],
+        memory: ConversationMemory,
         max_iterations: int = 6,
     ) -> None:
         self.tools = tools
         self.planner = planner
         self.connectors = connectors
+        self.memory = memory
         self.graph = build_workflow(planner, tools, max_iterations)
 
     @property
@@ -39,8 +43,12 @@ class CellusAgent:
         planner_prompt: str,
         synthesis_prompt: str,
         max_iterations: int = 6,
+        memory: ConversationMemory | None = None,
     ) -> "CellusAgent":
         """Fábrica assíncrona: carrega tools de todos os conectores e monta o agente."""
+        telemetry = setup_telemetry()
+        logger.info("Telemetria: %s", telemetry)
+
         tools: list[BaseTool] = []
         for connector in connectors:
             connector_tools = await connector.load_tools()
@@ -49,7 +57,7 @@ class CellusAgent:
 
         planner = Planner(llm, tools, planner_prompt, synthesis_prompt)
         logger.info("CellusAgent criado com %d tools.", len(tools))
-        return cls(tools, planner, connectors, max_iterations)
+        return cls(tools, planner, connectors, memory or ConversationMemory(), max_iterations)
 
     async def close(self) -> None:
         """Libera recursos de todos os conectores."""

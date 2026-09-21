@@ -1,7 +1,7 @@
 """Rotas REST genéricas do framework Cellus."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from cellus.core.nodes import initial_state
@@ -11,21 +11,37 @@ router = APIRouter()
 
 class ChatRequest(BaseModel):
     question: str = Field(..., description="Pergunta em linguagem natural.")
+    session_id: str = Field("default", description="ID da sessão para memória de conversação.")
 
 
 class ChatResponse(BaseModel):
     question: str
     answer: str
+    session_id: str
     tools_used: list[str]
     tool_times_ms: dict[str, float]
 
 
-async def _run(request: Request, question: str) -> ChatResponse:
+async def _run(request: Request, question: str, session_id: str) -> ChatResponse:
     agent = request.app.state.agent
-    final = await agent.graph.ainvoke(initial_state(question))
+    memory = agent.memory
+
+    # monta estado com histórico da sessão + pergunta atual
+    state = initial_state(question, session_id)
+    history = memory.get_messages(session_id)
+    if history:
+        state["messages"] = history + state["messages"]
+
+    final = await agent.graph.ainvoke(state)
+
+    # persiste na memória
+    memory.add_user_message(session_id, question)
+    memory.add_ai_message(session_id, final["final_answer"])
+
     return ChatResponse(
         question=question,
         answer=final["final_answer"],
+        session_id=session_id,
         tools_used=final.get("selected_tools", []),
         tool_times_ms={k: round(v * 1000, 2) for k, v in final.get("tool_times", {}).items()},
     )
@@ -33,12 +49,18 @@ async def _run(request: Request, question: str) -> ChatResponse:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: Request, body: ChatRequest) -> ChatResponse:
-    return await _run(request, body.question)
+    return await _run(request, body.question, body.session_id)
 
 
 @router.post("/query", response_model=ChatResponse)
 async def query(request: Request, body: ChatRequest) -> ChatResponse:
-    return await _run(request, body.question)
+    return await _run(request, body.question, body.session_id)
+
+
+@router.delete("/memory/{session_id}")
+async def clear_memory(session_id: str, request: Request) -> dict:
+    request.app.state.agent.memory.clear(session_id)
+    return {"cleared": session_id}
 
 
 @router.get("/health")
@@ -48,7 +70,12 @@ async def health(request: Request) -> dict:
     for c in agent.connectors:
         if hasattr(c, "client") and hasattr(c.client, "verify"):
             connector_status[c.name] = c.client.verify()
-    return {"status": "ok", "tools_loaded": len(agent.tools), "connectors": connector_status}
+    return {
+        "status": "ok",
+        "tools_loaded": len(agent.tools),
+        "connectors": connector_status,
+        "active_sessions": len(agent.memory.list_sessions()),
+    }
 
 
 @router.get("/tools")

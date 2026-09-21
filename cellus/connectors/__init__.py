@@ -1,5 +1,6 @@
 from cellus.connectors.base import ToolConnector
 from cellus.connectors.mcp import MCPConnector
 from cellus.connectors.neo4j import Neo4jConnector
+from cellus.connectors.sql import SQLConnector
 
-__all__ = ["ToolConnector", "Neo4jConnector", "MCPConnector"]
+__all__ = ["ToolConnector", "Neo4jConnector", "MCPConnector", "SQLConnector"]
