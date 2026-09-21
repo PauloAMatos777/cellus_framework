@@ -5,6 +5,7 @@ Pré-requisito: python -m industrial.mcp_server.server
 """
 from __future__ import annotations
 
+from cellus.analytics.connector import AnalyticsConnector
 from cellus.api.server import create_app
 from cellus.connectors.mcp import MCPConnector
 from cellus.connectors.neo4j import Neo4jConnector
@@ -29,6 +30,7 @@ async def build_agent() -> CellusAgent:
                 url=settings.mcp_server_url,
                 transport=settings.mcp_transport,
             ),
+            AnalyticsConnector(),
         ],
         planner_prompt=PLANNER_PROMPT,
         synthesis_prompt=SYNTHESIS_PROMPT,
