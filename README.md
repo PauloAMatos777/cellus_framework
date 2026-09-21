@@ -1,80 +1,57 @@
 # Cellus Framework
 
-Framework modular de Agente de IA com **LangGraph + Tool Calling**.
-Qualquer desenvolvedor acopla suas próprias fontes de dados implementando `ToolConnector`.
+Agente de IA para plantas industriais que raciocina sobre **Knowledge Graph de ativos** e **dados operacionais em tempo real** de qualquer historiador.
+
+Engenheiros de processo fazem perguntas em linguagem natural. O Cellus consulta o Neo4j (contexto, hierarquia, POPs) e o historiador via MCP (telemetria, alarmes, status) — e entrega a resposta consolidada, com rastreabilidade de fonte e memória de conversação entre turnos.
+
+Trocar de historiador é mudar uma linha no `.env`. Nenhum código muda.
 
 ## Arquitetura
 
 ```
-cellus/                  ← pacote do framework (genérico, reutilizável)
-├── core/                ← AgentState, Planner, Nodes, Workflow, CellusAgent
-├── connectors/          ← ToolConnector (base), Neo4jConnector, MCPConnector
-├── api/                 ← create_app() + rotas REST genéricas
-├── utils/               ← build_llm(), logging
-└── settings.py          ← CellusSettings (extensível)
+cellus/
+├── core/          ← AgentState, Planner, Nodes, Workflow, CellusAgent
+├── connectors/    ← ToolConnector (base), Neo4jConnector, MCPConnector, SQLConnector
+├── memory/        ← ConversationMemory (histórico por session_id)
+├── api/           ← create_app() + rotas REST
+├── utils/         ← build_llm(), logging, telemetry (LangSmith / OpenTelemetry)
+└── settings.py    ← CellusSettings (extensível)
 
-industrial/              ← domínio Cellus (exemplo de implementação)
-├── graph/               ← Neo4jClient, cypher_queries, seed.cypher
-├── tools/               ← get_neo4j_tools() (tools específicas do POP)
-├── mcp_server/          ← servidor MCP mock (substituível pelo vNode na V2)
-├── models.py            ← modelos de domínio (VariableReading, Alarm, ...)
-├── prompts.py           ← prompts do especialista industrial
-└── settings.py          ← IndustrialSettings (estende CellusSettings)
+industrial/        ← implementação de referência
+├── graph/         ← Neo4jClient, cypher_queries, seed.cypher
+├── tools/         ← LangChain Tools para Neo4j
+├── mcp_server/    ← servidor MCP mock (substitua pelo historiador real em produção)
+├── prompts.py     ← persona do especialista industrial
+└── settings.py    ← IndustrialSettings
 ```
 
-## Como criar um novo agente (outro domínio)
+## Fluxo do agente
 
-### 1. Implemente seus conectores
-
-```python
-from cellus.connectors.base import ToolConnector
-from langchain_core.tools import StructuredTool
-
-class MyDBConnector(ToolConnector):
-    name = "mydb"
-
-    async def load_tools(self) -> list:
-        def mydb_search(query: str) -> str:
-            """Busca informações no banco de dados."""
-            return my_db.search(query)
-
-        return [StructuredTool.from_function(mydb_search)]
+```
+Pergunta → planning → execute → planning → ... → synthesize → Resposta
 ```
 
-### 2. Monte o agente
+- **planning** — o LLM decide quais fontes consultar (sem if/else de roteamento)
+- **execute** — consulta Neo4j e historiador via MCP em paralelo, acumula telemetria por fonte
+- **synthesize** — consolida tudo em uma resposta com rastreabilidade
 
-```python
-from cellus.core.agent import CellusAgent
-from cellus.utils.llm import build_llm
-from my_domain.settings import settings
+## Fontes de dados suportadas
 
-agent = await CellusAgent.create(
-    llm=build_llm(settings),
-    connectors=[MyDBConnector(), MCPConnector(...)],
-    planner_prompt="Você é especialista em...",
-    synthesis_prompt="Consolide os dados...",
-)
-```
+| Fonte | Conector | Como conectar |
+|-------|----------|---------------|
+| OSIsoft PI / vNode / AVEVA Historian | `MCPConnector` | MCP Server sobre o historiador |
+| Neo4j (Knowledge Graph) | `Neo4jConnector` | Bolt direto |
+| PostgreSQL / MySQL | `SQLConnector` | SQLAlchemy connection string |
+| SAP Datasphere | `SQLConnector` | HANA JDBC via `hdbcli` |
+| Databricks | `SQLConnector` | Databricks SQL Connector |
 
-### 3. Use via API ou CLI
-
-```python
-# API REST
-from cellus.api.server import create_app
-app = create_app(agent_factory=lambda: build_agent())
-
-# CLI / direto
-from cellus.core.nodes import initial_state
-result = await agent.graph.ainvoke(initial_state("sua pergunta"))
-print(result["final_answer"])
-```
-
-## Setup do domínio industrial (Cellus)
+## Setup do domínio industrial
 
 ### Dependências
+
 ```bash
 uv sync
-cp .env.example .env   # configure OPENAI_API_KEY e NEO4J_PASSWORD
+cp .env.example .env   # configure OPENAI_API_KEY, NEO4J_PASSWORD e MCP_SERVER_URL
 ```
 
 ### Neo4j Desktop
@@ -83,28 +60,92 @@ cp .env.example .env   # configure OPENAI_API_KEY e NEO4J_PASSWORD
 3. Coloque a senha em `NEO4J_PASSWORD` no `.env`.
 
 ### Execução
+
 ```bash
-# 1) Carrega o Knowledge Graph
+# 1. Carrega o Knowledge Graph
 python app.py --seed
 
-# 2) Sobe o servidor MCP mock (terminal separado)
+# 2. Sobe o servidor MCP mock (terminal separado)
 python -m industrial.mcp_server.server
 
-# 3a) CLI interativa
+# 3a. CLI interativa
 python app.py
 
-# 3b) API REST
+# 3b. API REST
 uvicorn main:app --reload
 ```
 
+### Em produção — aponte para o historiador real
+
+```env
+MCP_SERVER_URL=http://seu-vnode-ou-pi:8000/mcp
+```
+
+## Memória de conversação
+
+Cada sessão mantém histórico entre turnos. Passe `session_id` no request:
+
+```json
+{ "question": "e o compressor C-102?", "session_id": "sala-controle-1" }
+```
+
+O agente lembra o contexto da conversa anterior. Para limpar:
+
+```
+DELETE /memory/{session_id}
+```
+
+## Observabilidade
+
+Configure no `.env` — ambos são opcionais:
+
+```env
+# LangSmith — rastreia chamadas LLM, tools, latência e tokens
+LANGSMITH_API_KEY=...
+LANGSMITH_PROJECT=cellus-industrial
+
+# OpenTelemetry — envia traces para Jaeger, Grafana Tempo, Datadog, etc.
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+OTEL_SERVICE_NAME=cellus-agent
+```
+
+```bash
+uv sync --extra otel   # instala dependências OpenTelemetry
+```
+
 ## Endpoints REST
+
 | Método | Rota | Descrição |
 |--------|------|-----------|
-| POST | `/chat` | Conversa com o agente |
-| POST | `/query` | Alias de /chat |
-| GET | `/health` | Status dos conectores |
-| GET | `/tools` | Tools disponíveis agrupadas por prefixo |
+| POST | `/chat` | Pergunta ao agente (suporta `session_id`) |
+| POST | `/query` | Alias de `/chat` |
+| DELETE | `/memory/{session_id}` | Limpa histórico da sessão |
+| GET | `/health` | Status dos conectores e sessões ativas |
+| GET | `/tools` | Tools disponíveis agrupadas por fonte |
 
-## Evolução V2 (vNode)
-Altere apenas `MCP_SERVER_URL` no `.env` para apontar ao endpoint MCP real.
-Nada muda no framework, no agente, nas tools Neo4j ou na API.
+## Implementando um novo conector
+
+```python
+from cellus.connectors.base import ToolConnector
+from langchain_core.tools import StructuredTool
+
+class MinhaFonteConnector(ToolConnector):
+    name = "minha_fonte"
+
+    async def load_tools(self) -> list:
+        def buscar_dados(query: str) -> str:
+            """Busca dados operacionais."""
+            return meu_banco.query(query)
+        return [StructuredTool.from_function(buscar_dados)]
+```
+
+```python
+agent = await CellusAgent.create(
+    llm=build_llm(settings),
+    connectors=[Neo4jConnector(...), MCPConnector(...), MinhaFonteConnector()],
+    planner_prompt="Você é especialista em...",
+    synthesis_prompt="Consolide os dados coletados...",
+)
+```
+
+Nenhum arquivo dentro de `cellus/` precisa ser alterado.
