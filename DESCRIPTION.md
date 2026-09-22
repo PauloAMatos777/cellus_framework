@@ -1,106 +1,121 @@
 # Cellus Framework
 
-**Agente de IA para plantas industriais que raciocina sobre Knowledge Graph de ativos e dados operacionais em tempo real de qualquer historiador.**
-
-Engenheiros de processo fazem perguntas em linguagem natural. O Cellus consulta o Knowledge Graph da planta (Neo4j) para entender contexto, hierarquia e POPs — e busca os dados operacionais diretamente no historiador (OSIsoft PI, vNode, AVEVA Historian) via MCP. A resposta chega consolidada, com rastreabilidade de fonte.
-
-Trocar de historiador é mudar uma linha no `.env`. Nenhum código muda.
+**Plataforma de agente de IA para plantas industriais que raciocina sobre Knowledge Graph de ativos, dados operacionais em tempo real e fontes corporativas — entregando respostas consolidadas, rastreáveis e defensáveis em linguagem natural.**
 
 ---
 
 ## O problema que resolve
 
-Plantas industriais têm dois mundos separados:
+Plantas industriais operam com dados fragmentados em mundos separados:
 
-- **Dados de contexto** — hierarquia de planta, equipamentos, instrumentos, POPs, limites operacionais → vivem em documentos, ERPs ou grafos
-- **Dados operacionais** — telemetria, alarmes, status em tempo real → vivem no historiador (PI, vNode, Historian)
+- **Contexto de planta** — hierarquia de ativos, equipamentos, instrumentos, POPs, limites operacionais → vivem em documentos, ERPs ou grafos
+- **Dados operacionais** — telemetria, alarmes, status em tempo real → vivem no historiador (PI, vNode, AVEVA Historian)
+- **Dados corporativos** — consumo de insumos, ordens de produção, análises → vivem em SAP, Databricks, bancos relacionais
 
-Hoje, um engenheiro precisa consultar esses dois mundos manualmente para responder: *"por que o compressor X está em alarme e qual é o procedimento?"*
-
-O Cellus faz isso automaticamente, em linguagem natural.
+Hoje, um engenheiro precisa consultar esses mundos manualmente, cruzar informações e chegar a uma conclusão. O Cellus faz isso automaticamente, em linguagem natural, com rastreabilidade de cada fonte consultada.
 
 ---
 
 ## Como funciona
 
+O Cellus é um agente ReAct compilado com LangGraph. O LLM decide quais ferramentas chamar a cada ciclo — sem roteamento hardcoded. O agente consulta as fontes necessárias, acumula contexto e sintetiza a resposta.
+
 ```
 Pergunta → planning → execute → planning → ... → synthesize → Resposta
 ```
 
-- **planning** — o LLM decide quais ferramentas chamar (Knowledge Graph e/ou historiador)
-- **execute** — consulta Neo4j (contexto de ativos) e o historiador via MCP (dados em tempo real) em paralelo
+- **planning** — o LLM analisa o contexto acumulado e decide quais ferramentas chamar
+- **execute** — consulta Neo4j, historiador via MCP e fontes corporativas em paralelo
 - **synthesize** — consolida tudo em uma resposta com rastreabilidade de fonte
-
-O agente opera em ciclo ReAct compilado com LangGraph. Sem if/else de roteamento — o LLM decide o que consultar.
 
 ---
 
-## Arquitetura de dados
+## Capacidades
 
-```
-Agente
-├── Neo4jConnector   → Knowledge Graph (hierarquia, POPs, limites, decisões)
-└── MCPConnector     → MCP Server → { OSIsoft PI | vNode | AVEVA Historian | mock }
+### Raciocínio multi-fonte
+
+O agente raciocina sobre Neo4j, historiador industrial e fontes corporativas em um único ciclo. Não há if/else de roteamento — o LLM decide o que consultar com base no contexto acumulado.
+
+### Knowledge Graph de ativos
+
+O Neo4j armazena a hierarquia completa da planta: áreas, processos, equipamentos, instrumentos, variáveis, POPs e decisões de processo. O agente usa esse grafo para entender *o que* medir, *onde* medir e *o que fazer* quando algo está fora dos limites.
+
+### Dados operacionais via MCP
+
+O Model Context Protocol (MCP) é a camada de abstração sobre o historiador. Em desenvolvimento, use o mock incluso. Em produção, aponte para o endpoint do seu historiador — o agente não sabe a diferença.
+
+```env
+MCP_SERVER_URL=http://seu-vnode-ou-pi:8000/mcp
 ```
 
-O MCP Server é a camada de abstração sobre o historiador. Em desenvolvimento, use o mock incluso. Em produção, aponte para o endpoint real do seu historiador — o agente não sabe a diferença.
+### Memória de conversação
+
+Cada sessão mantém histórico entre turnos. O engenheiro pode fazer perguntas de acompanhamento sem repetir contexto.
+
+```json
+{ "question": "e o compressor C-102?", "session_id": "sala-controle-1" }
+```
+
+### Assurance Layer (JEV Engine)
+
+Camada intermediária entre planejamento e execução que torna o agente industrialmente defensável:
+
+- **Validação de evidências** — bloqueia execução se o contexto não tem as variáveis necessárias para responder ao objetivo. Para investigar kappa, o agente precisa de temperatura, pressão, tempo de residência e dosagem química antes de concluir.
+- **Controle de acesso** — nenhuma tool executa sem verificação de política para o usuário e a fonte de dados (SAP, PI, Neo4j, OT).
+- **Classificação de risco** — tools de ação operacional (`OPERATIONAL_ACTION`) são bloqueadas automaticamente. Prescrições (`PRESCRIPTIVE`) exigem aprovação humana explícita.
+- **Score de confiança** — cada resposta tem um score 0–1 baseado em cobertura de evidências, diversidade de fontes e consistência dos resultados.
+- **Auditoria completa** — cada execução gera um `AuditRecord` com pergunta, plano, validações, fontes, confiança e resposta final. Recuperável via API.
+
+### Observabilidade
+
+Suporte nativo a LangSmith (rastreamento de chamadas LLM, tools e latência) e OpenTelemetry (traces para Jaeger, Grafana Tempo, Datadog).
+
+### Extensibilidade
+
+Novos conectores, novas tools e novos domínios sem alterar o framework. Basta implementar `ToolConnector` e injetar no `CellusAgent.create()`.
 
 ---
 
 ## Stack
 
-- **[LangGraph](https://github.com/langchain-ai/langgraph)** — orquestração do ciclo ReAct
-- **[LangChain](https://github.com/langchain-ai/langchain)** — abstração de LLMs e tools
-- **[MCP (Model Context Protocol)](https://modelcontextprotocol.io/)** — protocolo aberto para dados operacionais (historiadores)
-- **[Neo4j](https://neo4j.com/)** — Knowledge Graph de ativos industriais
-- **[FastAPI](https://fastapi.tiangolo.com/)** — API REST pronta para uso
-- **[Pydantic Settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)** — configuração via `.env`
-- **Python 3.12+**
+| Componente | Tecnologia |
+|------------|------------|
+| Orquestração do agente | LangGraph |
+| Abstração de LLMs e tools | LangChain |
+| Dados operacionais | MCP (Model Context Protocol) |
+| Knowledge Graph | Neo4j |
+| API REST | FastAPI |
+| Configuração | Pydantic Settings |
+| Observabilidade | LangSmith + OpenTelemetry |
+| Runtime | Python 3.12+ |
 
 ---
 
-## Estrutura
+## Fontes de dados suportadas
 
-```
-cellus/               ← framework (não mexa)
-├── core/             ← AgentState, Planner, Nodes, Workflow, CellusAgent
-├── connectors/       ← ToolConnector (ABC), Neo4jConnector, MCPConnector
-├── api/              ← create_app() + rotas REST
-├── utils/            ← build_llm(), logging
-└── settings.py       ← CellusSettings
-
-industrial/           ← implementação de referência (use como template)
-├── graph/            ← seed.cypher com hierarquia de planta, POPs, variáveis
-├── tools/            ← LangChain Tools para Neo4j
-├── mcp_server/       ← servidor MCP mock (substitua pelo seu historiador em produção)
-├── prompts.py        ← persona do especialista industrial
-└── settings.py       ← variáveis do domínio
-```
+| Fonte | Tipo | Conector |
+|-------|------|----------|
+| OSIsoft PI / AVEVA Historian | Historiador industrial | `MCPConnector` |
+| vNode | Historiador industrial | `MCPConnector` |
+| Neo4j | Knowledge Graph | `Neo4jConnector` |
+| PostgreSQL / MySQL | Banco relacional | `SQLConnector` |
+| SAP Datasphere | Data warehouse | `SQLConnector` |
+| Databricks | Lakehouse | `SQLConnector` |
 
 ---
 
 ## Quickstart
 
-### 1. Dependências
-
 ```bash
 uv sync
-cp .env.example .env  # configure OPENAI_API_KEY, NEO4J_PASSWORD e MCP_SERVER_URL
-```
+cp .env.example .env
 
-### 2. Suba o Knowledge Graph e o mock do historiador
-
-```bash
-# Carrega hierarquia de planta, POPs e variáveis no Neo4j
+# Carrega o Knowledge Graph
 python app.py --seed
 
-# Sobe o servidor MCP mock (simula o historiador)
+# Sobe o mock do historiador
 python -m industrial.mcp_server.server
-```
 
-### 3. Use
-
-```bash
 # CLI interativa
 python app.py
 
@@ -108,72 +123,17 @@ python app.py
 uvicorn main:app --reload
 ```
 
-### 4. Em produção — aponte para o historiador real
-
-```env
-# .env
-MCP_SERVER_URL=http://seu-vnode-ou-pi:8000/mcp
-```
-
-Nenhuma linha de código muda.
-
 ---
 
-## Exemplo de pergunta
+## Exemplo de uso
 
 > *"O compressor C-101 está operando fora dos limites? Qual é o POP de resposta?"*
 
 O agente:
 1. Consulta o Neo4j → localiza C-101 na hierarquia, recupera limites operacionais e o POP associado
 2. Consulta o historiador via MCP → busca telemetria recente das variáveis do C-101
-3. Consolida → responde com status atual, desvios identificados e passos do POP
-
----
-
-## Conectando seu historiador
-
-Implemente um `MCPServer` compatível com seu historiador ou use um adaptador existente:
-
-| Historiador | Como conectar |
-|-------------|---------------|
-| OSIsoft PI | MCP Server sobre PI Web API |
-| vNode | MCP Server nativo (V2) |
-| AVEVA Historian | MCP Server sobre REST API |
-| Qualquer outro | Implemente `ToolConnector` |
-
-## Conectando fontes de dados corporativas
-
-Além do historiador, o agente pode consultar qualquer fonte de dados via `ToolConnector`:
-
-| Fonte | Tipo | Como conectar |
-|-------|------|---------------|
-| PostgreSQL | Banco relacional | `ToolConnector` sobre `psycopg2` / `asyncpg` |
-| MySQL | Banco relacional | `ToolConnector` sobre `mysql-connector-python` |
-| SAP Datasphere | Data warehouse | `ToolConnector` sobre OData API ou JDBC |
-| Databricks | Lakehouse | `ToolConnector` sobre Databricks SQL Connector |
-
-O agente raciocina sobre todas as fontes simultaneamente — Knowledge Graph, historiador e dados corporativos — e consolida a resposta em uma única saída.
-
----
-
-## Variáveis de ambiente
-
-```env
-OPENAI_API_KEY=...
-OPENAI_BASE_URL=https://api.openai.com/v1   # ou Azure AI Foundry
-OPENAI_MODEL=gpt-4o
-OPENAI_TEMPERATURE=0.0
-
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=...
-
-MCP_SERVER_URL=http://localhost:8000/mcp    # mock local ou historiador real
-MCP_TRANSPORT=streamable_http
-
-LOG_LEVEL=INFO
-AGENT_MAX_TOOL_ITERATIONS=6
-```
+3. Valida evidências → confirma que tem dados suficientes para concluir
+4. Consolida → responde com status atual, desvios identificados, passos do POP e `confidence_score`
 
 ---
 
@@ -183,14 +143,33 @@ AGENT_MAX_TOOL_ITERATIONS=6
 |--------|------|-----------|
 | POST | `/chat` | Pergunta ao agente |
 | POST | `/query` | Alias de `/chat` |
-| GET | `/health` | Status dos conectores (Neo4j + MCP) |
+| GET | `/audit/{audit_id}` | Registro completo de auditoria da execução |
+| DELETE | `/memory/{session_id}` | Limpa histórico da sessão |
+| GET | `/health` | Status dos conectores |
 | GET | `/tools` | Tools disponíveis por fonte |
 
 ---
 
-## Roadmap
+## Variáveis de ambiente
 
-- [ ] Suporte a múltiplos servidores MCP simultâneos (múltiplos historiadores)
-- [ ] Memória de conversação entre sessões
-- [ ] Observabilidade (LangSmith / OpenTelemetry)
-- [ ] Empacotamento como biblioteca PyPI (`pip install cellus`)
+```env
+OPENAI_API_KEY=...
+OPENAI_MODEL=gpt-4o
+OPENAI_TEMPERATURE=0.0
+
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=...
+
+MCP_SERVER_URL=http://localhost:8000/mcp
+MCP_TRANSPORT=streamable_http
+
+LOG_LEVEL=INFO
+AGENT_MAX_TOOL_ITERATIONS=6
+
+# Observabilidade (opcionais)
+LANGSMITH_API_KEY=...
+LANGSMITH_PROJECT=cellus-industrial
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+OTEL_SERVICE_NAME=cellus-agent
+```

@@ -1,7 +1,7 @@
 [project]
 name = "cellus-framework"
-version = "2.0.0"
-description = "Framework modular de Agente de IA com LangGraph + Tool Calling (Neo4j + MCP)"
+version = "3.0.0"
+description = "Framework modular de Agente de IA com LangGraph + Tool Calling + JEV Assurance Layer"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.3.0", "pytest-asyncio>=0.25.0", "ruff>=0.9.0"]
+dev = ["pytest>=8.3.0", "pytest-asyncio>=0.25.0", "ruff>=0.9.0", "pytest-cov>=6.0.0"]
 sql = ["sqlalchemy>=2.0.0"]
 postgres = ["sqlalchemy>=2.0.0", "psycopg2-binary>=2.9.0"]
 mysql = ["sqlalchemy>=2.0.0", "mysql-connector-python>=9.0.0"]
@@ -37,3 +37,7 @@ packages = ["cellus"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["cellus"]
+omit = ["*/tests/*"]

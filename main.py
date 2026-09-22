@@ -10,6 +10,7 @@ from cellus.api.server import create_app
 from cellus.connectors.mcp import MCPConnector
 from cellus.connectors.neo4j import Neo4jConnector
 from cellus.core.agent import CellusAgent
+from cellus.core.assurance import JEVEngine
 from cellus.utils.llm import build_llm
 from cellus.utils.logging import configure_logging
 from industrial.graph.neo4j_client import Neo4jClient
@@ -21,10 +22,11 @@ configure_logging(settings.log_level)
 
 
 async def build_agent() -> CellusAgent:
+    neo4j_client = Neo4jClient()
     return await CellusAgent.create(
         llm=build_llm(settings),
         connectors=[
-            Neo4jConnector(client=Neo4jClient(), tools_factory=get_neo4j_tools),
+            Neo4jConnector(client=neo4j_client, tools_factory=get_neo4j_tools),
             MCPConnector(
                 server_name="industrial",
                 url=settings.mcp_server_url,
@@ -35,6 +37,7 @@ async def build_agent() -> CellusAgent:
         planner_prompt=PLANNER_PROMPT,
         synthesis_prompt=SYNTHESIS_PROMPT,
         max_iterations=settings.agent_max_tool_iterations,
+        jev=JEVEngine(neo4j_client=neo4j_client),
     )
 
 

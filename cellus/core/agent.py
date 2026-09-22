@@ -5,6 +5,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from cellus.connectors.base import ToolConnector
+from cellus.core.assurance.jev_engine import JEVEngine
 from cellus.core.planner import Planner
 from cellus.core.workflow import build_workflow
 from cellus.memory.conversation import ConversationMemory
@@ -15,7 +16,7 @@ logger = get_logger("cellus.agent")
 
 
 class CellusAgent:
-    """Agente genérico: recebe conectores, prompts e monta o workflow."""
+    """Agente genérico: recebe conectores, prompts e monta o workflow com JEV opcional."""
 
     def __init__(
         self,
@@ -24,12 +25,14 @@ class CellusAgent:
         connectors: list[ToolConnector],
         memory: ConversationMemory,
         max_iterations: int = 6,
+        jev: JEVEngine | None = None,
     ) -> None:
         self.tools = tools
         self.planner = planner
         self.connectors = connectors
         self.memory = memory
-        self.graph = build_workflow(planner, tools, max_iterations)
+        self.jev = jev
+        self.graph = build_workflow(planner, tools, max_iterations, jev=jev)
 
     @property
     def tool_names(self) -> list[str]:
@@ -44,6 +47,7 @@ class CellusAgent:
         synthesis_prompt: str,
         max_iterations: int = 6,
         memory: ConversationMemory | None = None,
+        jev: JEVEngine | None = None,
     ) -> "CellusAgent":
         """Fábrica assíncrona: carrega tools de todos os conectores e monta o agente."""
         telemetry = setup_telemetry()
@@ -56,8 +60,9 @@ class CellusAgent:
             logger.info("Connector '%s' carregou %d tools.", connector.name, len(connector_tools))
 
         planner = Planner(llm, tools, planner_prompt, synthesis_prompt)
-        logger.info("CellusAgent criado com %d tools.", len(tools))
-        return cls(tools, planner, connectors, memory or ConversationMemory(), max_iterations)
+        assurance_status = "ativo" if jev else "desativado"
+        logger.info("CellusAgent criado com %d tools. JEV: %s", len(tools), assurance_status)
+        return cls(tools, planner, connectors, memory or ConversationMemory(), max_iterations, jev)
 
     async def close(self) -> None:
         """Libera recursos de todos os conectores."""

@@ -20,6 +20,10 @@ class ChatResponse(BaseModel):
     session_id: str
     tools_used: list[str]
     tool_times_ms: dict[str, float]
+    audit_id: str = ""
+    confidence_score: float = 0.0
+    risk_level: str = "INFO"
+    sources_consulted: list[str] = []
 
 
 async def _run(request: Request, question: str, session_id: str) -> ChatResponse:
@@ -44,6 +48,10 @@ async def _run(request: Request, question: str, session_id: str) -> ChatResponse
         session_id=session_id,
         tools_used=final.get("selected_tools", []),
         tool_times_ms={k: round(v * 1000, 2) for k, v in final.get("tool_times", {}).items()},
+        audit_id=final.get("audit_id", ""),
+        confidence_score=final.get("confidence_score", 0.0),
+        risk_level=final.get("risk_level", "INFO"),
+        sources_consulted=list(set(final.get("sources_consulted", []))),
     )
 
 
@@ -76,6 +84,17 @@ async def health(request: Request) -> dict:
         "connectors": connector_status,
         "active_sessions": len(agent.memory.list_sessions()),
     }
+
+
+@router.get("/audit/{audit_id}")
+async def get_audit(audit_id: str, request: Request) -> dict:
+    agent = request.app.state.agent
+    if not agent.jev:
+        return {"error": "JEV Engine não está ativo nesta instância."}
+    record = await agent.jev._audit_registry.get(audit_id)
+    if not record:
+        return {"error": f"Audit '{audit_id}' não encontrado."}
+    return record.model_dump(mode="json")
 
 
 @router.get("/tools")

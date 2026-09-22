@@ -1,4 +1,4 @@
-"""Montagem do grafo LangGraph (genérico)."""
+"""Montagem do grafo LangGraph com Assurance Layer (JEV)."""
 from __future__ import annotations
 
 from functools import partial
@@ -6,17 +6,23 @@ from functools import partial
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, StateGraph
 
+from cellus.core.assurance.jev_engine import JEVEngine
 from cellus.core.nodes import (make_execution_node, make_planning_node,
                                 make_synthesis_node, route_after_planning)
 from cellus.core.planner import Planner
 from cellus.core.state import AgentState
 
 
-def build_workflow(planner: Planner, tools: list[BaseTool], max_iterations: int = 6):
+def build_workflow(
+    planner: Planner,
+    tools: list[BaseTool],
+    max_iterations: int = 6,
+    jev: JEVEngine | None = None,
+):
     graph = StateGraph(AgentState)
     graph.add_node("planning", make_planning_node(planner))
-    graph.add_node("execute", make_execution_node(tools))
-    graph.add_node("synthesize", make_synthesis_node(planner))
+    graph.add_node("execute", make_execution_node(tools, jev=jev))
+    graph.add_node("synthesize", make_synthesis_node(planner, jev=jev))
 
     graph.add_edge(START, "planning")
     graph.add_conditional_edges(
